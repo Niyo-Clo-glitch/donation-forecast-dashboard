@@ -4,3 +4,4 @@ matplotlib
 seaborn
 prophet
 openpyxl
+numpy
