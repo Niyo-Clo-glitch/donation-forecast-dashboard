@@ -1,80 +1,71 @@
 import streamlit as st
 import pandas as pd
+import seaborn as sns
 import matplotlib.pyplot as plt
 from prophet import Prophet
 from io import BytesIO
 
-st.set_page_config(page_title="Quarterly Donation Forecast", layout="wide")
-st.title("📈 Quarterly Donation Forecast")
+# App Configuration
+st.set_page_config(page_title="Maison Shalom Dashboard", layout="wide")
+st.title("📊 Donation Forecast Dashboard - Maison Shalom")
 
-uploaded_file = st.file_uploader("Upload your donation CSV", type=["csv"])
+# Upload CSV
+df = None
+uploaded_file = st.sidebar.file_uploader("Upload your donation CSV file", type="csv")
 
 if uploaded_file:
-    try:
-        df = pd.read_csv(uploaded_file)
+    df = pd.read_csv(uploaded_file)
+    df['Date'] = pd.to_datetime(df['Date'])
 
-        # Ensure column names are standard
-        df.columns = df.columns.str.strip()
-        if "Date" not in df.columns or "Total_Donations_RWF" not in df.columns:
-            st.error("CSV must contain 'Date' and 'Total_Donations_RWF' columns.")
-            st.stop()
+    st.success("✅ File uploaded successfully!")
+    st.write("### Preview of Uploaded Data", df.head())
 
-        df = df[["Date", "Total_Donations_RWF"]]
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.sort_values("Date")
+    # Filters
+    with st.sidebar:
+        st.markdown("### Filter Options")
+        donors = st.multiselect("Select Donors", options=sorted(df['Donor'].unique()), default=list(df['Donor'].unique()))
+        campaigns = st.multiselect("Select Campaign Types", options=sorted(df['Campaign_Type'].unique()), default=list(df['Campaign_Type'].unique()))
+        regions = st.multiselect("Select Regions", options=sorted(df['Region'].unique()), default=list(df['Region'].unique()))
 
-        # Display raw data
-        st.subheader("Raw Donation Data")
-        st.dataframe(df.tail(10))
+    # Apply filters
+    filtered_df = df[(df['Donor'].isin(donors)) &
+                     (df['Campaign_Type'].isin(campaigns)) &
+                     (df['Region'].isin(regions))]
 
-        # Resample to quarterly sums
-        df_quarterly = df.resample("Q", on="Date").sum().reset_index()
+    st.markdown("## 📊 Bar Chart of Donations (Grouped Quarterly)")
+    filtered_df['Quarter'] = filtered_df['Date'].dt.to_period("Q").dt.start_time
 
-        # Prophet formatting
-        prophet_df = df_quarterly.rename(columns={"Date": "ds", "Total_Donations_RWF": "y"})
+    grouped = filtered_df.groupby(['Quarter', 'Donor', 'Campaign_Type'])['Total_Donations_RWF'].sum().reset_index()
 
-        # Forecasting for 3 years = 12 quarters
-        model = Prophet()
-        model.fit(prophet_df)
-        future = model.make_future_dataframe(periods=12, freq="Q")
-        forecast = model.predict(future)
+    pivot = grouped.pivot_table(index='Quarter', columns=['Donor', 'Campaign_Type'], values='Total_Donations_RWF', aggfunc='sum').fillna(0)
+    st.bar_chart(pivot)
 
-        # Plot forecast
-        st.subheader("Forecasted Donations (Next 3 Years)")
-        fig1 = model.plot(forecast)
-        st.pyplot(fig1)
+    # Forecast Section
+    st.markdown("## 🔮 Forecast Total Donations (Next 3 Years)")
+    monthly = filtered_df.groupby(filtered_df['Date'].dt.to_period('M'))['Total_Donations_RWF'].sum().reset_index()
+    monthly['Date'] = monthly['Date'].dt.to_timestamp()
 
-        # Bar chart: Quarterly historical + forecast
-        st.subheader("📊 Quarterly Donations Overview")
-        bar_df = forecast[["ds", "yhat"]].copy()
-        bar_df.set_index("ds", inplace=True)
-        bar_df = bar_df.tail(20)  # Show 5 years: last 2 actual + 3 forecast
+    forecast_df = monthly.rename(columns={"Date": "ds", "Total_Donations_RWF": "y"})
+    model = Prophet()
+    model.fit(forecast_df)
 
-        fig2, ax = plt.subplots(figsize=(12, 5))
-        bar_df["yhat"].plot(kind="bar", ax=ax)
-        ax.set_title("Quarterly Donations (Actual + Forecast)")
-        ax.set_ylabel("RWF")
-        ax.set_xlabel("Quarter")
-        st.pyplot(fig2)
+    future = model.make_future_dataframe(periods=36, freq='M')
+    forecast = model.predict(future)
 
-        # Download forecast CSV
-        st.subheader("📥 Download Forecast Data")
-        download_df = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]]
-        download_df = download_df.rename(columns={
-            "ds": "Date",
-            "yhat": "Forecast",
-            "yhat_lower": "Lower Bound",
-            "yhat_upper": "Upper Bound"
-        })
+    fig1 = model.plot(forecast)
+    st.pyplot(fig1)
 
-        buffer = BytesIO()
-        download_df.to_csv(buffer, index=False)
-        st.download_button(
-            label="Download Forecast CSV",
-            data=buffer.getvalue(),
-            file_name="donation_forecast.csv",
-            mime="text/csv"
-        )
+    # Download Section
+    st.markdown("### 📥 Download Forecast")
+    forecast_to_download = forecast[['ds', 'yhat']].rename(columns={"ds": "Date", "yhat": "Forecast_Donations_RWF"})
+    csv_data = forecast_to_download.to_csv(index=False).encode('utf-8')
 
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+    st.download_button(
+        label="Download Forecast as CSV",
+        data=csv_data,
+        file_name="donation_forecast.csv",
+        mime="text/csv"
+    )
+
+else:
+    st.info("📂 Please upload a donation CSV file to continue.")
