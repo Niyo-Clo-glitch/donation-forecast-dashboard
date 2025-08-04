@@ -2,94 +2,83 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import io
 from prophet import Prophet
-from io import StringIO
 
-# -------------------- PAGE CONFIG --------------------
-st.set_page_config(page_title="Maison Shalom Donations", layout="wide")
-st.title("📊 Maison Shalom Donation Dashboard")
+# Title
+st.title("📊 Donation Forecast Dashboard - Maison Shalom")
 
-# -------------------- SIDEBAR --------------------
-st.sidebar.header("1️⃣ Upload Donation CSV")
-uploaded_file = st.sidebar.file_uploader("Upload your donation CSV file", type=["csv"])
+# File uploader
+uploaded_file = st.file_uploader("Upload Donation CSV", type=["csv"])
 
 if uploaded_file:
+    # Load data
     df = pd.read_csv(uploaded_file)
 
-    # Ensure proper datatypes
-    df['Date'] = pd.to_datetime(df['Date'])
+    # Basic checks and preprocessing
+    if 'Date' not in df.columns or 'Amount' not in df.columns:
+        st.error("CSV must contain 'Date' and 'Amount' columns.")
+    else:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
 
-    # Filters
-    st.sidebar.header("2️⃣ Filter Data")
-    donor_list = df['Donor'].unique().tolist()
-    campaign_list = df['Campaign_Type'].unique().tolist()
-    region_list = df['Region'].unique().tolist()
+        # Optional filters
+        with st.expander("🔍 Filter Data"):
+            if 'Donor' in df.columns:
+                selected_donors = st.multiselect("Select Donor(s):", df['Donor'].dropna().unique())
+                if selected_donors:
+                    df = df[df['Donor'].isin(selected_donors)]
 
-    selected_donors = st.sidebar.multiselect("Filter by Donor", options=donor_list, default=donor_list)
-    selected_campaigns = st.sidebar.multiselect("Filter by Campaign Type", options=campaign_list, default=campaign_list)
-    selected_regions = st.sidebar.multiselect("Filter by Region", options=region_list, default=region_list)
+            if 'Campaign Type' in df.columns:
+                selected_campaigns = st.multiselect("Select Campaign Type(s):", df['Campaign Type'].dropna().unique())
+                if selected_campaigns:
+                    df = df[df['Campaign Type'].isin(selected_campaigns)]
 
-    # Filter dataset
-    filtered_df = df[
-        (df['Donor'].isin(selected_donors)) &
-        (df['Campaign_Type'].isin(selected_campaigns)) &
-        (df['Region'].isin(selected_regions))
-    ]
+            if 'Region' in df.columns:
+                selected_regions = st.multiselect("Select Region(s):", df['Region'].dropna().unique())
+                if selected_regions:
+                    df = df[df['Region'].isin(selected_regions)]
 
-    # -------------------- RAW DATA --------------------
-    st.subheader("📄 Filtered Raw Data")
-    st.dataframe(filtered_df)
+        # Monthly Bar Chart
+        df_monthly = df.groupby(df['Date'].dt.to_period("M")).agg({'Amount': 'sum'}).reset_index()
+        df_monthly['Date'] = df_monthly['Date'].dt.to_timestamp()
 
-    # -------------------- BAR CHART --------------------
-    st.subheader("📊 Monthly Donations by Donor and Campaign Type")
-    monthly_grouped = (
-        filtered_df.groupby([pd.Grouper(key='Date', freq='M'), 'Donor', 'Campaign_Type'])['Total_Donations_RWF']
-        .sum()
-        .reset_index()
-    )
-    monthly_grouped['Month'] = monthly_grouped['Date'].dt.strftime('%Y-%m')
+        st.subheader("📈 Monthly Donations")
+        fig1, ax1 = plt.subplots()
+        sns.barplot(data=df_monthly, x='Date', y='Amount', ax=ax1)
+        ax1.set_title("Monthly Donation Totals")
+        ax1.set_xticklabels(ax1.get_xticklabels(), rotation=45)
+        st.pyplot(fig1)
 
-    plt.figure(figsize=(16, 6))
-    sns.barplot(
-        data=monthly_grouped,
-        x="Month",
-        y="Total_Donations_RWF",
-        hue="Donor",
-        ci=None
-    )
-    plt.xticks(rotation=45)
-    plt.xlabel("Month")
-    plt.ylabel("Total Donations (RWF)")
-    plt.title("Monthly Donations Grouped by Donor")
-    st.pyplot(plt.gcf())
-    plt.clf()
+        # Forecasting
+        st.subheader("🔮 Forecast Future Donations")
+        forecast_df = df[['Date', 'Amount']].rename(columns={'Date': 'ds', 'Amount': 'y'})
 
-    # -------------------- FORECAST --------------------
-    st.subheader("🔮 Forecast Total Donations (Next 6 Months)")
+        model = Prophet()
+        model.fit(forecast_df)
 
-    forecast_df = filtered_df.groupby(pd.Grouper(key='Date', freq='M'))['Total_Donations_RWF'].sum().reset_index()
-    forecast_df.columns = ['ds', 'y']
+        future = model.make_future_dataframe(periods=6, freq='M')
+        forecast = model.predict(future)
 
-    model = Prophet()
-    model.fit(forecast_df)
+        fig2 = model.plot(forecast)
+        st.pyplot(fig2)
 
-    future = model.make_future_dataframe(periods=6, freq='M')
-    forecast = model.predict(future)
+        # Forecast chart download
+        buf = io.BytesIO()
+        fig2.savefig(buf, format="png")
+        st.download_button("📥 Download Forecast Chart", data=buf.getvalue(), file_name="donation_forecast.png", mime="image/png")
 
-    forecast_chart = model.plot(forecast)
-    st.pyplot(forecast_chart)
+        # Forecast CSV download
+        forecast_csv = forecast.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Forecast Data (CSV)", data=forecast_csv, file_name='donation_forecast.csv', mime='text/csv')
 
-    # -------------------- DOWNLOAD FORECAST --------------------
-    st.subheader("📥 Download Forecasted Data")
-    download_df = forecast[['ds', 'yhat']].rename(columns={'ds': 'Date', 'yhat': 'Forecasted_Donations'})
-    csv = download_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Forecast as CSV",
-        data=csv,
-        file_name='donation_forecast.csv',
-        mime='text/csv'
-    )
+        # Forecast Excel download
+        excel_buf = io.BytesIO()
+        with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
+            forecast.to_excel(writer, index=False, sheet_name='Forecast')
+        excel_buf.seek(0)
+        st.download_button("📥 Download Forecast Data (Excel)", data=excel_buf, file_name="donation_forecast.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-else:
-    st.info("📂 Please upload a CSV file to get started.")
-
+        # Raw data preview
+        with st.expander("📄 Preview Cleaned Data"):
+            st.dataframe(df.head(100))
