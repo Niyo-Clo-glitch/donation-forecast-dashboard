@@ -1,12 +1,12 @@
-# Generating the corrected app.py content as a string
-app_code = '''
-import streamlit as st
+import os
 import pandas as pd
+import seaborn as sns
 import matplotlib.pyplot as plt
 from prophet import Prophet
+import streamlit as st
 from io import BytesIO
 
-# Page config
+# App Configuration
 st.set_page_config(page_title="Maison Shalom Dashboard", layout="wide")
 st.title("📊 Donation Forecast Dashboard - Maison Shalom")
 
@@ -19,7 +19,7 @@ if uploaded_file:
     df['Date'] = pd.to_datetime(df['Date'])
 
     st.success("✅ File uploaded successfully!")
-    st.write("### Filtered Data Preview", df.head())
+    st.write("### Preview of Uploaded Data", df.head())
 
     # Filters
     with st.sidebar:
@@ -33,17 +33,19 @@ if uploaded_file:
                      (df['Campaign_Type'].isin(campaigns)) &
                      (df['Region'].isin(regions))]
 
-    # Quarterly chart
-    st.markdown("## 📊 Quarterly Donations by Donor & Campaign Type")
+    st.markdown("## 📊 Bar Chart of Donations (Grouped Quarterly)")
     filtered_df['Quarter'] = filtered_df['Date'].dt.to_period("Q").dt.start_time
+
     grouped = filtered_df.groupby(['Quarter', 'Donor', 'Campaign_Type'])['Total_Donations_RWF'].sum().reset_index()
+
     pivot = grouped.pivot_table(index='Quarter', columns=['Donor', 'Campaign_Type'], values='Total_Donations_RWF', aggfunc='sum').fillna(0)
     st.bar_chart(pivot)
 
-    # Forecast section
+    # Forecast Section
     st.markdown("## 🔮 Forecast Total Donations (Next 3 Years)")
     monthly = filtered_df.groupby(filtered_df['Date'].dt.to_period('M'))['Total_Donations_RWF'].sum().reset_index()
     monthly['Date'] = monthly['Date'].dt.to_timestamp()
+
     forecast_df = monthly.rename(columns={"Date": "ds", "Total_Donations_RWF": "y"})
     model = Prophet()
     model.fit(forecast_df)
@@ -54,7 +56,7 @@ if uploaded_file:
     fig1 = model.plot(forecast)
     st.pyplot(fig1)
 
-    # Download section
+    # Download Section
     st.markdown("### 📥 Download Forecast")
     forecast_to_download = forecast[['ds', 'yhat']].rename(columns={"ds": "Date", "yhat": "Forecast_Donations_RWF"})
     csv_data = forecast_to_download.to_csv(index=False).encode('utf-8')
@@ -68,11 +70,3 @@ if uploaded_file:
 
 else:
     st.info("📂 Please upload a donation CSV file to continue.")
-'''
-
-# Save the code to a Python file
-file_path = "/mnt/data/app.py"
-with open(file_path, "w", encoding="utf-8") as f:
-    f.write(app_code)
-
-file_path
