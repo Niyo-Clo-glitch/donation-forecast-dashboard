@@ -1,6 +1,4 @@
-import os
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 from prophet import Prophet
 import streamlit as st
@@ -36,17 +34,17 @@ if uploaded_file:
     st.markdown("## 📊 Bar Chart of Donations (Grouped Quarterly)")
     filtered_df['Quarter'] = filtered_df['Date'].dt.to_period("Q").dt.start_time
 
-    grouped = filtered_df.groupby(['Quarter', 'Donor', 'Campaign_Type'])['Total_Donations_RWF'].sum().reset_index()
+    grouped = filtered_df.groupby(['Quarter', 'Donor', 'Campaign_Type'])['Amount'].sum().reset_index()
 
-    pivot = grouped.pivot_table(index='Quarter', columns=['Donor', 'Campaign_Type'], values='Total_Donations_RWF', aggfunc='sum').fillna(0)
+    pivot = grouped.pivot_table(index='Quarter', columns=['Donor', 'Campaign_Type'], values='Amount', aggfunc='sum').fillna(0)
     st.bar_chart(pivot)
 
     # Forecast Section
     st.markdown("## 🔮 Forecast Total Donations (Next 3 Years)")
-    monthly = filtered_df.groupby(filtered_df['Date'].dt.to_period('M'))['Total_Donations_RWF'].sum().reset_index()
+    monthly = filtered_df.groupby(filtered_df['Date'].dt.to_period('M'))['Amount'].sum().reset_index()
     monthly['Date'] = monthly['Date'].dt.to_timestamp()
 
-    forecast_df = monthly.rename(columns={"Date": "ds", "Total_Donations_RWF": "y"})
+    forecast_df = monthly.rename(columns={"Date": "ds", "Amount": "y"})
     model = Prophet()
     model.fit(forecast_df)
 
