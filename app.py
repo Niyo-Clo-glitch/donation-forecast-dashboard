@@ -1,62 +1,90 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 from prophet import Prophet
-import matplotlib.pyplot as plt
+from prophet.plot import plot_plotly
+from datetime import datetime
 
-# Page setup
-st.set_page_config(page_title="Maison Shalom Dashboard", layout="wide")
-st.title("📊 Donation Forecast Dashboard - Maison Shalom")
+st.set_page_config(page_title="Donation Dashboard", layout="wide")
 
-# File upload
-uploaded_file = st.sidebar.file_uploader("📂 Upload your donation CSV file", type="csv")
+st.title("📊 Donation Forecast & Analytics Dashboard")
 
-if uploaded_file:
+# Upload CSV
+uploaded_file = st.file_uploader("Upload your donations CSV", type="csv")
+
+if uploaded_file is not None:
+    # Load CSV
     df = pd.read_csv(uploaded_file)
-    df['Date'] = pd.to_datetime(df['Date'])
 
-    # Filters
-    with st.sidebar:
-        donors = st.multiselect("Select Donors", options=sorted(df['Donor'].unique()), default=list(df['Donor'].unique()))
-        campaigns = st.multiselect("Select Campaign Types", options=sorted(df['Campaign_Type'].unique()), default=list(df['Campaign_Type'].unique()))
-        regions = st.multiselect("Select Regions", options=sorted(df['Region'].unique()), default=list(df['Region'].unique()))
+    # Normalize column names
+    df.columns = df.columns.str.strip().str.lower()
 
-    # Apply filters
-    filtered_df = df[
-        (df['Donor'].isin(donors)) &
-        (df['Campaign_Type'].isin(campaigns)) &
-        (df['Region'].isin(regions))
+    # Check required columns
+    required_cols = ['date', 'donor', 'campaign_type', 'region', 'total_donations_rwf']
+    if not all(col in df.columns for col in required_cols):
+        st.error("CSV must include columns: Date, Donor, Campaign_Type, Region, Total_Donations_RWF")
+        st.stop()
+
+    # Convert date column
+    df['date'] = pd.to_datetime(df['date'])
+
+    # Sidebar filters
+    st.sidebar.header("🔍 Filters")
+    donors = st.sidebar.multiselect("Select Donor(s)", options=df['donor'].unique(), default=df['donor'].unique())
+    campaigns = st.sidebar.multiselect("Select Campaign Type(s)", options=df['campaign_type'].unique(), default=df['campaign_type'].unique())
+    regions = st.sidebar.multiselect("Select Region(s)", options=df['region'].unique(), default=df['region'].unique())
+
+    # Filter Data
+    df_filtered = df[
+        (df['donor'].isin(donors)) &
+        (df['campaign_type'].isin(campaigns)) &
+        (df['region'].isin(regions))
     ]
 
-    st.success("✅ File uploaded and data loaded successfully!")
-    st.write("### Preview of Uploaded Data")
-    st.dataframe(filtered_df.head())
+    st.subheader("📈 Total Donations Over Time")
+    time_group = df_filtered.groupby(pd.Grouper(key='date', freq='M')).sum(numeric_only=True).reset_index()
 
-    # Grouped Bar Chart (Quarterly)
-    st.markdown("## 📊 Bar Chart of Donations (Grouped Quarterly)")
-    filtered_df['Quarter'] = filtered_df['Date'].dt.to_period("Q").dt.start_time
-    grouped = filtered_df.groupby(['Quarter', 'Donor', 'Campaign_Type'])['Total_Donations_RWF'].sum().reset_index()
-    pivot = grouped.pivot_table(index='Quarter', columns=['Donor', 'Campaign_Type'], values='Total_Donations_RWF').fillna(0)
-    st.bar_chart(pivot)
+    chart = alt.Chart(time_group).mark_line(point=True).encode(
+        x=alt.X('date:T', title='Month'),
+        y=alt.Y('total_donations_rwf:Q', title='Total Donations (RWF)'),
+        tooltip=['date', 'total_donations_rwf']
+    ).properties(width=800, height=400)
 
-    # Forecasting 5 Years Ahead
-    st.markdown("## 🔮 Forecast Total Donations (5 Years Projection)")
-    monthly = filtered_df.groupby(filtered_df['Date'].dt.to_period('M'))['Total_Donations_RWF'].sum().reset_index()
-    monthly['Date'] = monthly['Date'].dt.to_timestamp()
+    st.altair_chart(chart)
 
-    forecast_df = monthly.rename(columns={"Date": "ds", "Total_Donations_RWF": "y"})
-    model = Prophet()
-    model.fit(forecast_df)
+    # Summary
+    st.subheader("📊 Summary Statistics")
+    total_donations = int(df_filtered['total_donations_rwf'].sum())
+    total_records = df_filtered.shape[0]
+    st.metric("Total Donations (RWF)", f"{total_donations:,.0f}")
+    st.metric("Total Records", total_records)
 
-    future = model.make_future_dataframe(periods=60, freq='M')  # 60 months = 5 years
-    forecast = model.predict(future)
+    # Breakdown by donor
+    st.subheader("📊 Donations by Donor")
+    donor_group = df_filtered.groupby('donor')['total_donations_rwf'].sum().reset_index().sort_values(by='total_donations_rwf', ascending=False)
+    chart2 = alt.Chart(donor_group).mark_bar().encode(
+        x=alt.X('donor', sort='-y'),
+        y='total_donations_rwf',
+        tooltip=['donor', 'total_donations_rwf']
+    ).properties(width=800, height=400)
 
-    fig1 = model.plot(forecast)
-    st.pyplot(fig1)
+    st.altair_chart(chart2)
 
-    # Download forecast
-    forecast_download = forecast[['ds', 'yhat']].rename(columns={'ds': 'Date', 'yhat': 'Forecast_Donations_RWF'})
-    csv_data = forecast_download.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download Forecast CSV", data=csv_data, file_name="forecast_5_years.csv", mime="text/csv")
+    # Forecasting
+    st.subheader("🔮 Forecast Future Donations (Prophet)")
+
+    prophet_data = df_filtered.groupby('date')['total_donations_rwf'].sum().reset_index()
+    prophet_data.columns = ['ds', 'y']
+
+    m = Prophet()
+    m.fit(prophet_data)
+
+    future = m.make_future_dataframe(periods=365)
+    forecast = m.predict(future)
+
+    fig = plot_plotly(m, forecast)
+    st.plotly_chart(fig)
 
 else:
-    st.info("👈 Please upload a CSV file to begin.")
+    st.info("👆 Please upload a CSV file to start.")
+
