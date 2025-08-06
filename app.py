@@ -69,8 +69,8 @@ st.pyplot(fig2)
 # ——— Chart 3: Forecast Next 3 Years ———
 st.subheader("Forecast Next 3 Years (36 Months)")
 horizon = 36  # months
-
 prophet_df = df_f[['date', 'total_donations_rwf']].rename(columns={'date': 'ds', 'total_donations_rwf': 'y'})
+
 m = Prophet()
 m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
 m.fit(prophet_df)
@@ -82,79 +82,81 @@ fig3 = m.plot(forecast)
 plt.title("Donation Forecast for Next 36 Months")
 st.pyplot(fig3)
 
-# ——— Table of Projected Values ———
-proj_df = (
-    forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-    .tail(horizon)
-    .rename(columns={
-        'ds': 'Date',
-        'yhat': 'Forecast (RWF)',
-        'yhat_lower': 'Lower Bound (RWF)',
-        'yhat_upper': 'Upper Bound (RWF)'
-    })
-)
-st.subheader("Projected Values (Next 3 Years)")
-st.dataframe(proj_df.style.format({
-    'Forecast (RWF)': '{:,.0f}',
-    'Lower Bound (RWF)': '{:,.0f}',
-    'Upper Bound (RWF)': '{:,.0f}'
-}), use_container_width=True)
+# ——— Extract historical & forecast periods ———
+hist_period = ts['2022-01-01':'2024-12-31']
+fore_period = forecast.set_index('ds')['yhat']['2025-01-01':'2027-12-31']
+
+# ——— Annual totals for comparison ———
+hist_annual = hist_period.groupby(hist_period.index.year).sum()
+fore_annual = fore_period.groupby(fore_period.index.year).sum()
+years = sorted(set(hist_annual.index).union(fore_annual.index))
+
+# ——— Chart 4: Actual vs Forecast Annual Donations ———
+st.subheader("Actual vs Forecast Annual Donations (2022–2027)")
+fig4, ax4 = plt.subplots(figsize=(10, 4))
+ax4.bar([str(y) for y in hist_annual.index], hist_annual.values, label='2022–24 Actual')
+ax4.bar([str(y) for y in fore_annual.index], fore_annual.values, label='2025–27 Forecast', alpha=0.7)
+ax4.set_xlabel("Year")
+ax4.set_ylabel("Total Donations (RWF)")
+ax4.set_title("3-Year Actual vs Forecast Comparison")
+ax4.legend()
+st.pyplot(fig4)
+
+# ——— Table: Annual Comparison ———
+comp_df = pd.DataFrame({
+    'Actual (RWF)': hist_annual,
+    'Forecast (RWF)': fore_annual
+}).reindex(years).fillna(0).astype(int)
+st.subheader("Annual Comparison Table")
+st.table(comp_df.style.format("{:,.0f}"))
 
 # ——— Download Full Report (PDF) ———
 pdf_buffer = io.BytesIO()
 with PdfPages(pdf_buffer) as pdf:
-    # cover page with filters & summary
+    # cover page
     fig0, ax0 = plt.subplots(figsize=(8.27, 11))
     ax0.axis('off')
-    filter_text = (
+    summary = (
         f"Donation Forecast Report\n\n"
-        f"Run on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-        f"Filters applied:\n"
+        f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"Filters:\n"
         f" • Donors: {', '.join(donors)}\n"
         f" • Campaigns: {', '.join(campaign)}\n"
         f" • Regions: {', '.join(regions)}\n\n"
-        f"Summary stats:\n"
-        f" • Total records: {count}\n"
-        f" • Total donated: {total:,.0f} RWF"
+        f"Total Records: {count}\n"
+        f"Total Donated: {total:,.0f} RWF"
     )
-    ax0.text(0.05, 0.95, filter_text, va='top', fontsize=12)
+    ax0.text(0.05, 0.95, summary, va='top', fontsize=12)
     plt.tight_layout()
     pdf.savefig(fig0)
     plt.close(fig0)
 
-    # chart pages
-    pdf.savefig(fig1); plt.close(fig1)
-    pdf.savefig(fig2); plt.close(fig2)
-    pdf.savefig(fig3); plt.close(fig3)
+    # plots
+    for fig in (fig1, fig2, fig3, fig4):
+        pdf.savefig(fig)
+        plt.close(fig)
 
     # table page
-    fig4, ax4 = plt.subplots(figsize=(11, 8))
-    ax4.axis('off')
-    tbl = ax4.table(
-        cellText=[
-            [
-                row.Date.strftime('%Y-%m'),
-                f"{row['Forecast (RWF)']:,.0f}",
-                f"{row['Lower Bound (RWF)']:,.0f}",
-                f"{row['Upper Bound (RWF)']:,.0f}"
-            ]
-            for _, row in proj_df.iterrows()
-        ],
-        colLabels=proj_df.columns,
+    fig5, ax5 = plt.subplots(figsize=(11, 8))
+    ax5.axis('off')
+    tbl = ax5.table(
+        cellText=[[str(year), f"{row['Actual (RWF)']:,.0f}", f"{row['Forecast (RWF)']:,.0f}"]
+                  for year, row in comp_df.iterrows()],
+        colLabels=["Year", "Actual (RWF)", "Forecast (RWF)"],
         loc='center'
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8)
     tbl.scale(1, 1.2)
     plt.tight_layout()
-    pdf.savefig(fig4)
-    plt.close(fig4)
+    pdf.savefig(fig5)
+    plt.close(fig5)
 
 pdf_buffer.seek(0)
 
 st.download_button(
     label="📄 Download Full Report (PDF)",
     data=pdf_buffer,
-    file_name="Donation_Forecast_Report_3yr.pdf",
+    file_name="Donation_Comparison_Report_2022_27.pdf",
     mime="application/pdf",
 )
