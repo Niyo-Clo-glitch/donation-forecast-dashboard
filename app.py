@@ -1,159 +1,89 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import altair as alt
 from prophet import Prophet
-import plotly.express as px
-import plotly.io as pio
-import io
-from fpdf import FPDF
+from prophet.plot import plot_plotly
+from datetime import datetime
 
-#----------------------------------
-# Utility Functions
-#----------------------------------
-@st.cache_data
-def load_data(uploaded_file):
+st.set_page_config(page_title="Donation Dashboard", layout="wide")
+
+st.title("📊 Donation Forecast & Analytics Dashboard")
+
+# Upload CSV
+uploaded_file = st.file_uploader("Upload your donations CSV", type="csv")
+
+if uploaded_file is not None:
+    # Load CSV
     df = pd.read_csv(uploaded_file)
-    # Detect date column
-    date_cols = [c for c in df.columns if "date" in c.lower()]
-    if not date_cols:
-        st.error("No date-like column found. Provide a column with 'date'.")
-        return None
-    date_col = date_cols[0]
-    try:
-        df[date_col] = pd.to_datetime(df[date_col])
-    except Exception:
-        st.error(f"Cannot parse dates in '{date_col}'.")
-        return None
-    # Detect donations column
-    y_cols = [c for c in df.columns if "donation" in c.lower() and "rwf" in c.lower()]
-    if not y_cols:
-        st.error("No 'total_donations_rwf' column found.")
-        return None
-    y_col = y_cols[0]
-    df = df.rename(columns={date_col: "ds", y_col: "y"})
-    return df
 
-#----------------------------------
-# PDF Report Builder
-#----------------------------------
-def create_pdf_report(figs, titles):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    for fig, title in zip(figs, titles):
-        try:
-            img = fig.to_image(format="png")
-        except RuntimeError:
-            img = None
-        pdf.add_page()
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, title, ln=True)
-        if img:
-            pdf.image(io.BytesIO(img), x=10, y=30, w=pdf.w-20)
-        else:
-            pdf.set_font("Arial", size=12)
-            pdf.ln(20)
-            pdf.cell(0, 10, "[Chart omitted: PNG export failed]", ln=True)
-    return pdf.output(dest="S").encode("latin-1")
+    # Normalize column names
+    df.columns = df.columns.str.strip().str.lower()
 
-#----------------------------------
-# Main App
-#----------------------------------
-def main():
-    st.set_page_config(page_title="Donation Forecast & Analytics", layout="wide")
-    st.title("📊 Donation Forecast & Analytics Dashboard")
+    # Check required columns
+    required_cols = ['date', 'donor', 'campaign_type', 'region', 'total_donations_rwf']
+    if not all(col in df.columns for col in required_cols):
+        st.error("CSV must include columns: Date, Donor, Campaign_Type, Region, Total_Donations_RWF")
+        st.stop()
 
-    # Sidebar: Data upload
-    st.sidebar.header("Data & Filters")
-    uploaded = st.sidebar.file_uploader("Upload donations CSV", type=["csv"])
-    if not uploaded:
-        st.info("Please upload a CSV file to proceed.")
-        return
-    df = load_data(uploaded)
-    if df is None:
-        return
+    # Convert date column
+    df['date'] = pd.to_datetime(df['date'])
 
-    # Sidebar: Filters inside expander
-    filters_exp = st.sidebar.expander("Filters", expanded=True)
-    donors = filters_exp.multiselect("Donors", options=df.get("donor", pd.Series()).dropna().unique())
-    campaigns = filters_exp.multiselect("Campaign Types", options=df.get("campaign_type", pd.Series()).dropna().unique())
-    regions = filters_exp.multiselect("Regions", options=df.get("region", pd.Series()).dropna().unique())
+    # Sidebar filters
+    st.sidebar.header("🔍 Filters")
+    donors = st.sidebar.multiselect("Select Donor(s)", options=df['donor'].unique(), default=df['donor'].unique())
+    campaigns = st.sidebar.multiselect("Select Campaign Type(s)", options=df['campaign_type'].unique(), default=df['campaign_type'].unique())
+    regions = st.sidebar.multiselect("Select Region(s)", options=df['region'].unique(), default=df['region'].unique())
 
-    # Apply filters
-    filtered = df.copy()
-    if any([donors, campaigns, regions]):
-        mask = pd.Series(True, index=filtered.index)
-        if donors:
-            mask &= filtered["donor"].isin(donors)
-        if campaigns:
-            mask &= filtered["campaign_type"].isin(campaigns)
-        if regions:
-            mask &= filtered["region"].isin(regions)
-        filtered = filtered[mask]
+    # Filter Data
+    df_filtered = df[
+        (df['donor'].isin(donors)) &
+        (df['campaign_type'].isin(campaigns)) &
+        (df['region'].isin(regions))
+    ]
 
-        # Excel download
-    buffer = io.BytesIO()
-    try:
-        # Use XlsxWriter engine for in-memory Excel
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            filtered.to_excel(writer, index=False, sheet_name='FilteredData')
-        buffer.seek(0)
-        st.sidebar.download_button(
-            "Download Filtered Data (Excel)",
-            data=buffer,
-            file_name="filtered_donations.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    except Exception as e:
-        st.sidebar.error("Excel export requires 'xlsxwriter'. Install it via pip.")
+    st.subheader("📈 Total Donations Over Time")
+    time_group = df_filtered.groupby(pd.Grouper(key='date', freq='M')).sum(numeric_only=True).reset_index()
 
-    # Key metrics
-    total, count, avg = filtered["y"].sum(), filtered.shape[0], filtered["y"].mean()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Donations (RWF)", f"{total:,.0f}")
-    c2.metric("Record Count", f"{count}")
-    c3.metric("Avg Donation (RWF)", f"{avg:,.0f}")
+    chart = alt.Chart(time_group).mark_line(point=True).encode(
+        x=alt.X('date:T', title='Month'),
+        y=alt.Y('total_donations_rwf:Q', title='Total Donations (RWF)'),
+        tooltip=['date', 'total_donations_rwf']
+    ).properties(width=800, height=400)
 
-    # Plotly config for download button
-    plot_config = {"modeBarButtonsToAdd": ["toImage"], "displaylogo": False}
+    st.altair_chart(chart)
 
-    # Time series chart
-    st.subheader("Total Donations Over Time")
-    fig1 = px.line(filtered, x="ds", y="y", labels={"ds": "Date", "y": "Donations (RWF)"})
-    st.plotly_chart(fig1, use_container_width=True, config=plot_config)
+    # Summary
+    st.subheader("📊 Summary Statistics")
+    total_donations = int(df_filtered['total_donations_rwf'].sum())
+    total_records = df_filtered.shape[0]
+    st.metric("Total Donations (RWF)", f"{total_donations:,.0f}")
+    st.metric("Total Records", total_records)
 
-    # Donations by donor
-    if "donor" in filtered.columns:
-        st.subheader("Donations by Donor")
-        donor_sum = filtered.groupby("donor")["y"].sum().reset_index()
-        fig2 = px.bar(donor_sum, x="donor", y="y", labels={"donor": "Donor", "y": "Donations (RWF)"})
-        st.plotly_chart(fig2, use_container_width=True, config=plot_config)
-    else:
-        fig2 = None
+    # Breakdown by donor
+    st.subheader("📊 Donations by Donor")
+    donor_group = df_filtered.groupby('donor')['total_donations_rwf'].sum().reset_index().sort_values(by='total_donations_rwf', ascending=False)
+    chart2 = alt.Chart(donor_group).mark_bar().encode(
+        x=alt.X('donor', sort='-y'),
+        y='total_donations_rwf',
+        tooltip=['donor', 'total_donations_rwf']
+    ).properties(width=800, height=400)
 
-    # Forecast controls
-    st.sidebar.subheader("Forecast Settings")
-    months = st.sidebar.slider("Forecast horizon (months)", 1, 60, 12)
-    if st.sidebar.button("Run Forecast"):
-        with st.spinner("Training forecasting model…"):
-            m = Prophet()
-            m.fit(filtered[["ds", "y"]])
-            fut = m.make_future_dataframe(periods=months, freq='M')
-            fc = m.predict(fut)
-        st.subheader(f"{months}-Month Forecast")
-        fig3 = px.line(fc, x="ds", y="yhat", labels={"ds": "Date", "yhat": "Forecast (RWF)"})
-        st.plotly_chart(fig3, use_container_width=True, config=plot_config)
-    else:
-        fig3 = None
+    st.altair_chart(chart2)
 
-    # PDF report download
-    if any([fig1, fig2, fig3]):
-        report = create_pdf_report([fig1, fig2 or fig1, fig3 or fig1],
-                                   ["Time Series", "Donor Breakdown", f"{months}-Month Forecast"])
-        st.sidebar.download_button(
-            "Download Full PDF Report", report,
-            file_name="donation_report.pdf", mime="application/pdf"
-        )
+    # Forecasting
+    st.subheader("🔮 Forecast Future Donations (Prophet)")
 
-if __name__ == "__main__":
-    main()
+    prophet_data = df_filtered.groupby('date')['total_donations_rwf'].sum().reset_index()
+    prophet_data.columns = ['ds', 'y']
 
+    m = Prophet()
+    m.fit(prophet_data)
+
+    future = m.make_future_dataframe(periods=365)
+    forecast = m.predict(future)
+
+    fig = plot_plotly(m, forecast)
+    st.plotly_chart(fig)
+
+else:
+    st.info("👆 Please upload a CSV file to start.")
