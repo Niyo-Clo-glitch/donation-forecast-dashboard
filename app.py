@@ -62,7 +62,7 @@ def main():
     st.set_page_config(page_title="Donation Forecast & Analytics", layout="wide")
     st.title("📊 Donation Forecast & Analytics Dashboard")
 
-    # Sidebar: Data upload & filters
+    # Sidebar: Data upload
     st.sidebar.header("Data & Filters")
     uploaded = st.sidebar.file_uploader("Upload donations CSV", type=["csv"])
     if not uploaded:
@@ -72,12 +72,14 @@ def main():
     if df is None:
         return
 
-    # Optional filters
-    with st.sidebar.expander("Filters", expanded=True):
-        donors = st.multiselect("Donors", options=df.get("donor", pd.Series()).unique(), key="donors")
-        campaigns = st.multiselect("Campaign Types", options=df.get("campaign_type", pd.Series()).unique(), key="campaigns")
-        regions = st.multiselect("Regions", options=df.get("region", pd.Series()).unique(), key="regions")
-    if donors or campaigns or regions:
+    # Sidebar: Filters inside expander
+    filters_exp = st.sidebar.expander("Filters", expanded=True)
+    donors = filters_exp.multiselect("Donors", options=df.get("donor", pd.Series()).dropna().unique())
+    campaigns = filters_exp.multiselect("Campaign Types", options=df.get("campaign_type", pd.Series()).dropna().unique())
+    regions = filters_exp.multiselect("Regions", options=df.get("region", pd.Series()).dropna().unique())
+
+    # Apply filters
+    if any([donors, campaigns, regions]):
         mask = pd.Series(True, index=df.index)
         if donors:
             mask &= df["donor"].isin(donors)
@@ -94,7 +96,7 @@ def main():
     c2.metric("Record Count", f"{count}")
     c3.metric("Avg Donation (RWF)", f"{avg:,.0f}")
 
-    # Plotly config with download button
+    # Plotly config for download button
     plot_config = {"modeBarButtonsToAdd": ["toImage"], "displaylogo": False}
 
     # Time series chart
