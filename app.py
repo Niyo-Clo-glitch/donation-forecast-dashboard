@@ -90,16 +90,21 @@ def main():
             mask &= filtered["region"].isin(regions)
         filtered = filtered[mask]
 
-    # Excel download
+        # Excel download
     buffer = io.BytesIO()
-    filtered.to_excel(buffer, index=False)
-    buffer.seek(0)
-    st.sidebar.download_button(
-        "Download Filtered Data (Excel)",
-        data=buffer,
-        file_name="filtered_donations.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    try:
+        # Use XlsxWriter engine for in-memory Excel
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            filtered.to_excel(writer, index=False, sheet_name='FilteredData')
+        buffer.seek(0)
+        st.sidebar.download_button(
+            "Download Filtered Data (Excel)",
+            data=buffer,
+            file_name="filtered_donations.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        st.sidebar.error("Excel export requires 'xlsxwriter'. Install it via pip.")
 
     # Key metrics
     total, count, avg = filtered["y"].sum(), filtered.shape[0], filtered["y"].mean()
