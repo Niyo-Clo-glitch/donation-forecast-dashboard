@@ -3,3 +3,5 @@ pandas
 numpy
 prophet
 plotly-express
+fpdf
+kaleido
