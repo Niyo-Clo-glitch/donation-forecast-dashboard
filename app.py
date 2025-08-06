@@ -1,89 +1,94 @@
+import io
 import streamlit as st
 import pandas as pd
-import altair as alt
+import matplotlib.pyplot as plt
 from prophet import Prophet
-from prophet.plot import plot_plotly
-from datetime import datetime
+from matplotlib.backends.backend_pdf import PdfPages
 
-st.set_page_config(page_title="Donation Dashboard", layout="wide")
+# ——— Page setup ———
+st.set_page_config(page_title="Donation Forecast & Analytics Dashboard", layout="wide")
+st.title("Donation Forecast & Analytics Dashboard")
 
-st.title("📊 Donation Forecast & Analytics Dashboard")
-
-# Upload CSV
+# ——— File uploader ———
 uploaded_file = st.file_uploader("Upload your donations CSV", type="csv")
+if not uploaded_file:
+    st.info("Please upload a CSV file to begin.")
+    st.stop()
 
-if uploaded_file is not None:
-    # Load CSV
-    df = pd.read_csv(uploaded_file)
+# ——— Data load & validation ———
+df = pd.read_csv(uploaded_file)
+df.columns = df.columns.str.strip().str.lower()
+required = ['date','donor','campaign_type','region','total_donations_rwf']
+if not all(col in df.columns for col in required):
+    st.error(f"CSV must contain: {required}")
+    st.stop()
 
-    # Normalize column names
-    df.columns = df.columns.str.strip().str.lower()
+df['date'] = pd.to_datetime(df['date'])
 
-    # Check required columns
-    required_cols = ['date', 'donor', 'campaign_type', 'region', 'total_donations_rwf']
-    if not all(col in df.columns for col in required_cols):
-        st.error("CSV must include columns: Date, Donor, Campaign_Type, Region, Total_Donations_RWF")
-        st.stop()
+# ——— Sidebar filters ———
+st.sidebar.header("Filters")
+donors   = st.sidebar.multiselect("Donor", df['donor'].unique(), default=df['donor'].unique())
+campaign = st.sidebar.multiselect("Campaign Type", df['campaign_type'].unique(), default=df['campaign_type'].unique())
+regions  = st.sidebar.multiselect("Region", df['region'].unique(), default=df['region'].unique())
 
-    # Convert date column
-    df['date'] = pd.to_datetime(df['date'])
+df_f = df[
+    df['donor'].isin(donors) &
+    df['campaign_type'].isin(campaign) &
+    df['region'].isin(regions)
+]
 
-    # Sidebar filters
-    st.sidebar.header("🔍 Filters")
-    donors = st.sidebar.multiselect("Select Donor(s)", options=df['donor'].unique(), default=df['donor'].unique())
-    campaigns = st.sidebar.multiselect("Select Campaign Type(s)", options=df['campaign_type'].unique(), default=df['campaign_type'].unique())
-    regions = st.sidebar.multiselect("Select Region(s)", options=df['region'].unique(), default=df['region'].unique())
+# ——— Chart 1: Total Donations Over Time ———
+st.subheader("Total Donations Over Time")
+ts = df_f.groupby('date')['total_donations_rwf'].sum().sort_index()
+fig1, ax1 = plt.subplots(figsize=(10,4))
+ax1.plot(ts.index, ts.values, '-o')
+ax1.set_xlabel("Date")
+ax1.set_ylabel("Total Donations (RWF)")
+ax1.set_title("Total Donations Over Time")
+st.pyplot(fig1)
 
-    # Filter Data
-    df_filtered = df[
-        (df['donor'].isin(donors)) &
-        (df['campaign_type'].isin(campaigns)) &
-        (df['region'].isin(regions))
-    ]
+# ——— Summary stats ———
+st.subheader("Summary Statistics")
+total = ts.sum()
+count = len(df_f)
+col1, col2 = st.columns(2)
+col1.metric("Total Donations (RWF)", f"{total:,.0f}")
+col2.metric("Total Records", f"{count}")
 
-    st.subheader("📈 Total Donations Over Time")
-    time_group = df_filtered.groupby(pd.Grouper(key='date', freq='M')).sum(numeric_only=True).reset_index()
+# ——— Chart 2: Donations by Donor ———
+st.subheader("Donations by Donor")
+by_donor = df_f.groupby('donor')['total_donations_rwf'].sum().sort_values(ascending=False)
+fig2, ax2 = plt.subplots(figsize=(10,4))
+ax2.bar(by_donor.index, by_donor.values)
+ax2.set_xlabel("Donor")
+ax2.set_ylabel("Total Donations (RWF)")
+ax2.set_title("Donations by Donor")
+plt.setp(ax2.get_xticklabels(), rotation=45, ha='right')
+st.pyplot(fig2)
 
-    chart = alt.Chart(time_group).mark_line(point=True).encode(
-        x=alt.X('date:T', title='Month'),
-        y=alt.Y('total_donations_rwf:Q', title='Total Donations (RWF)'),
-        tooltip=['date', 'total_donations_rwf']
-    ).properties(width=800, height=400)
+# ——— Chart 3: Forecast Future Donations ———
+st.subheader("Forecast Future Donations (Prophet)")
+horizon = st.slider("Months to Forecast", 1, 24, 12)
+prophet_df = df_f[['date','total_donations_rwf']].rename(columns={'date':'ds','total_donations_rwf':'y'})
+m = Prophet(monthly_seasonality=True)
+m.fit(prophet_df)
+future = m.make_future_dataframe(periods=horizon, freq='M')
+forecast = m.predict(future)
+fig3 = m.plot(forecast)
+plt.title(f"Next {horizon} Months Forecast")
+st.pyplot(fig3)
 
-    st.altair_chart(chart)
+# ——— Download Full Report (PDF) ———
+pdf_buffer = io.BytesIO()
+with PdfPages(pdf_buffer) as pdf:
+    pdf.savefig(fig1)
+    pdf.savefig(fig2)
+    pdf.savefig(fig3)
+pdf_buffer.seek(0)
 
-    # Summary
-    st.subheader("📊 Summary Statistics")
-    total_donations = int(df_filtered['total_donations_rwf'].sum())
-    total_records = df_filtered.shape[0]
-    st.metric("Total Donations (RWF)", f"{total_donations:,.0f}")
-    st.metric("Total Records", total_records)
-
-    # Breakdown by donor
-    st.subheader("📊 Donations by Donor")
-    donor_group = df_filtered.groupby('donor')['total_donations_rwf'].sum().reset_index().sort_values(by='total_donations_rwf', ascending=False)
-    chart2 = alt.Chart(donor_group).mark_bar().encode(
-        x=alt.X('donor', sort='-y'),
-        y='total_donations_rwf',
-        tooltip=['donor', 'total_donations_rwf']
-    ).properties(width=800, height=400)
-
-    st.altair_chart(chart2)
-
-    # Forecasting
-    st.subheader("🔮 Forecast Future Donations (Prophet)")
-
-    prophet_data = df_filtered.groupby('date')['total_donations_rwf'].sum().reset_index()
-    prophet_data.columns = ['ds', 'y']
-
-    m = Prophet()
-    m.fit(prophet_data)
-
-    future = m.make_future_dataframe(periods=365)
-    forecast = m.predict(future)
-
-    fig = plot_plotly(m, forecast)
-    st.plotly_chart(fig)
-
-else:
-    st.info("👆 Please upload a CSV file to start.")
+st.download_button(
+    label="📄 Download Full Report (PDF)",
+    data=pdf_buffer,
+    file_name="Donation_Forecast_Report.pdf",
+    mime="application/pdf",
+)
