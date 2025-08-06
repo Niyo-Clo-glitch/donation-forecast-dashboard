@@ -79,18 +79,30 @@ def main():
     regions = filters_exp.multiselect("Regions", options=df.get("region", pd.Series()).dropna().unique())
 
     # Apply filters
+    filtered = df.copy()
     if any([donors, campaigns, regions]):
-        mask = pd.Series(True, index=df.index)
+        mask = pd.Series(True, index=filtered.index)
         if donors:
-            mask &= df["donor"].isin(donors)
+            mask &= filtered["donor"].isin(donors)
         if campaigns:
-            mask &= df["campaign_type"].isin(campaigns)
+            mask &= filtered["campaign_type"].isin(campaigns)
         if regions:
-            mask &= df["region"].isin(regions)
-        df = df[mask]
+            mask &= filtered["region"].isin(regions)
+        filtered = filtered[mask]
+
+    # Excel download
+    buffer = io.BytesIO()
+    filtered.to_excel(buffer, index=False)
+    buffer.seek(0)
+    st.sidebar.download_button(
+        "Download Filtered Data (Excel)",
+        data=buffer,
+        file_name="filtered_donations.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
     # Key metrics
-    total, count, avg = df["y"].sum(), df.shape[0], df["y"].mean()
+    total, count, avg = filtered["y"].sum(), filtered.shape[0], filtered["y"].mean()
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Donations (RWF)", f"{total:,.0f}")
     c2.metric("Record Count", f"{count}")
@@ -101,13 +113,13 @@ def main():
 
     # Time series chart
     st.subheader("Total Donations Over Time")
-    fig1 = px.line(df, x="ds", y="y", labels={"ds": "Date", "y": "Donations (RWF)"})
+    fig1 = px.line(filtered, x="ds", y="y", labels={"ds": "Date", "y": "Donations (RWF)"})
     st.plotly_chart(fig1, use_container_width=True, config=plot_config)
 
     # Donations by donor
-    if "donor" in df.columns:
+    if "donor" in filtered.columns:
         st.subheader("Donations by Donor")
-        donor_sum = df.groupby("donor")["y"].sum().reset_index()
+        donor_sum = filtered.groupby("donor")["y"].sum().reset_index()
         fig2 = px.bar(donor_sum, x="donor", y="y", labels={"donor": "Donor", "y": "Donations (RWF)"})
         st.plotly_chart(fig2, use_container_width=True, config=plot_config)
     else:
@@ -119,7 +131,7 @@ def main():
     if st.sidebar.button("Run Forecast"):
         with st.spinner("Training forecasting model…"):
             m = Prophet()
-            m.fit(df[["ds", "y"]])
+            m.fit(filtered[["ds", "y"]])
             fut = m.make_future_dataframe(periods=months, freq='M')
             fc = m.predict(fut)
         st.subheader(f"{months}-Month Forecast")
