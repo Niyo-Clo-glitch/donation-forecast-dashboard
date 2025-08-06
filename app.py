@@ -18,7 +18,7 @@ if not uploaded_file:
 # ——— Data load & validation ———
 df = pd.read_csv(uploaded_file)
 df.columns = df.columns.str.strip().str.lower()
-required = ['date','donor','campaign_type','region','total_donations_rwf']
+required = ['date', 'donor', 'campaign_type', 'region', 'total_donations_rwf']
 if not all(col in df.columns for col in required):
     st.error(f"CSV must contain: {required}")
     st.stop()
@@ -40,7 +40,7 @@ df_f = df[
 # ——— Chart 1: Total Donations Over Time ———
 st.subheader("Total Donations Over Time")
 ts = df_f.groupby('date')['total_donations_rwf'].sum().sort_index()
-fig1, ax1 = plt.subplots(figsize=(10,4))
+fig1, ax1 = plt.subplots(figsize=(10, 4))
 ax1.plot(ts.index, ts.values, '-o')
 ax1.set_xlabel("Date")
 ax1.set_ylabel("Total Donations (RWF)")
@@ -58,7 +58,7 @@ col2.metric("Total Records", f"{count}")
 # ——— Chart 2: Donations by Donor ———
 st.subheader("Donations by Donor")
 by_donor = df_f.groupby('donor')['total_donations_rwf'].sum().sort_values(ascending=False)
-fig2, ax2 = plt.subplots(figsize=(10,4))
+fig2, ax2 = plt.subplots(figsize=(10, 4))
 ax2.bar(by_donor.index, by_donor.values)
 ax2.set_xlabel("Donor")
 ax2.set_ylabel("Total Donations (RWF)")
@@ -69,11 +69,15 @@ st.pyplot(fig2)
 # ——— Chart 3: Forecast Future Donations ———
 st.subheader("Forecast Future Donations (Prophet)")
 horizon = st.slider("Months to Forecast", 1, 24, 12)
-prophet_df = df_f[['date','total_donations_rwf']].rename(columns={'date':'ds','total_donations_rwf':'y'})
-m = Prophet(monthly_seasonality=True)
+prophet_df = df_f[['date', 'total_donations_rwf']].rename(columns={'date': 'ds', 'total_donations_rwf': 'y'})
+
+m = Prophet()
+m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
+
 m.fit(prophet_df)
 future = m.make_future_dataframe(periods=horizon, freq='M')
 forecast = m.predict(future)
+
 fig3 = m.plot(forecast)
 plt.title(f"Next {horizon} Months Forecast")
 st.pyplot(fig3)
